@@ -4,56 +4,62 @@ import (
 	"fmt"
 )
 
-type sAction struct {
+type Action int
+
+const (
+	OP_GET Action = iota
+	OP_PUT
+	OP_DEL
+)
+
+type op struct {
 	key    string
-	value  interface{}
-	action string
-	rc     chan sResult
+	val    interface{}
+	action Action
+	rc     chan res
 }
 
-type sResult struct {
+type res struct {
 	val interface{}
 	err error
 }
 
-const (
-	DS_OP_STORE  = "PUT"
-	DS_OP_READ   = "GET"
-	DS_OP_DELETE = "DELETE"
-)
-
 var (
 	ds   = make(map[string]interface{})
-	ops  = make(chan sAction)
+	ops  = make(chan op)
 	ctrl = make(chan struct{}, 1)
 )
 
 func Stop() {
-	// Signal close
 	ctrl <- struct{}{}
 }
 
 func init() {
 	go func() {
-		for f := range ops {
-			switch f.action {
-			case DS_OP_STORE:
-				f.rc <- store(f.key, f.value)
-			case DS_OP_READ:
-				f.rc <- read(f.key)
-			case DS_OP_DELETE:
-				f.rc <- del(f.key)
+		select {
+		case <-ctrl:
+			break
+		default:
+			for o := range ops {
+				switch o.action {
+				case OP_GET:
+					o.rc <- get(o.key)
+				case OP_PUT:
+					o.rc <- put(o.key, o.val)
+				case OP_DEL:
+					o.rc <- del(o.key)
+				}
 			}
 		}
 	}()
 }
 
 func Get(k string) (interface{}, error) {
-	res := make(chan sResult, 1)
+	res := make(chan res, 1)
 
-	ops <- sAction{
+	ops <- op{
 		key:    k,
-		action: DS_OP_READ,
+		action: OP_GET,
 		rc:     res,
 	}
 	r := <-res
@@ -62,12 +68,12 @@ func Get(k string) (interface{}, error) {
 }
 
 func Put(k string, v interface{}) (interface{}, error) {
-	res := make(chan sResult, 1)
+	res := make(chan res, 1)
 
-	ops <- sAction{
+	ops <- op{
 		key:    k,
-		value:  v,
-		action: DS_OP_STORE,
+		val:    v,
+		action: OP_PUT,
 		rc:     res,
 	}
 	r := <-res
@@ -76,11 +82,11 @@ func Put(k string, v interface{}) (interface{}, error) {
 }
 
 func Delete(k string) (interface{}, error) {
-	res := make(chan sResult, 1)
+	res := make(chan res, 1)
 
-	ops <- sAction{
+	ops <- op{
 		key:    k,
-		action: DS_OP_DELETE,
+		action: OP_DEL,
 		rc:     res,
 	}
 	r := <-res
@@ -88,26 +94,24 @@ func Delete(k string) (interface{}, error) {
 	return r.val, r.err
 }
 
-func store(k string, v interface{}) sResult {
-	ds[k] = v
-
-	return sResult{val: v, err: nil}
-}
-
-func read(k string) sResult {
-	v, ok := ds[k]
-	if !ok {
-		return sResult{
+func get(k string) res {
+	if v, ok := ds[k]; ok {
+		return res{
 			val: v,
-			err: fmt.Errorf("key '%v' does not exist", k),
 		}
 	}
 
-	return sResult{val: v, err: nil}
+	return res{
+		err: fmt.Errorf("key %s not found", k),
+	}
 }
 
-func del(k string) sResult {
-	delete(ds, k)
+func put(k string, v interface{}) res {
+	ds[k] = v
+	return res{val: v}
+}
 
-	return sResult{val: []byte(k), err: nil}
+func del(k string) res {
+	delete(ds, k)
+	return res{val: k}
 }
